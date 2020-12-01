@@ -12,36 +12,38 @@ import torch.nn as nn
 from dataload import Dataset, PairWiseSet, train_collate, Tripletset,cutmix_data
 from models.Losses import CenterLoss, FocalLoss, LabelSmoothing,LabelSmoothingLoss
 from utils import AverageMeter, calculate_metrics, Logger
-
+from precise_bn import get_bn_modules
+from apex import amp
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model_name', default='efficientnet-b3', type=str)
-# parser.add_argument('--model_name', default='resnext50_32x4d', type=str)
+# parser.add_argument('--model_name', default='efficientnet-b4', type=str)
+parser.add_argument('--model_name', default='efficientnet-b5', type=str)
 parser.add_argument('--savepath', default='./output', type=str)
 parser.add_argument('--loss', default='ls', type=str)
 parser.add_argument('--num_classes', default=5000, type=int)
 parser.add_argument('--pool_type', default='cat', type=str)
 # parser.add_argument('--metric', default='linear', type=str)
 parser.add_argument('--down', default=1, type=int)
-parser.add_argument('--lr', default=0.0001, type=float)
+parser.add_argument('--lr', default=0.00005, type=float)
 parser.add_argument('--weight_decay', default=5e-4, type=float)
 parser.add_argument('--momentum', default=0.9, type=float)
 parser.add_argument('--scheduler', default='cos', type=str)
-parser.add_argument('--resume', default=None, type=str)
-# parser.add_argument('--resume', default='./output/efficientnet-b1_cat_1+e2/best_0_acc_0.5573.pth', type=str)
+# parser.add_argument('--resume', default=None, type=str)
+parser.add_argument('--resume', default='./output/efficientnet-b5_cat_1+e3/best_0_acc_0.6681.pth', type=str)
 parser.add_argument('--lr_step', default=5, type=int)
 parser.add_argument('--warm', default=5, type=int)
 parser.add_argument('--print_step', default=50, type=int)
 parser.add_argument('--lr_gamma', default=0.1, type=float)
 parser.add_argument('--total_epoch', default=60, type=int)
-parser.add_argument('--batch_size', default=16, type=int)
+parser.add_argument('--batch_size', default=25, type=int)
 parser.add_argument('--num_workers', default=4, type=int)
 parser.add_argument('--multi-gpus', default=1, type=int)
 parser.add_argument('--gpu', default=0, type=int)
 parser.add_argument('--seed', default=2020, type=int)
 parser.add_argument('--pretrained', default=1, type=int)
-
+parser.add_argument('--fp16', type=int, default=1,
+                    help="use the fp16, model half and bn float32")
 args = parser.parse_args()
 
 
@@ -55,8 +57,15 @@ def train():
     t1 = time.time()
     s1 = time.time()
     for idx, (data, labels) in enumerate(trainloader):
-        data, labels = data.to(device), labels.long().to(device)
+
+        if not args.fp16:
+            data, target = data.to(device), labels.long().to(device)
+        else:
+            data, target = data.half().to(device), labels.long().to(device)
+        # data, labels = data.to(device), labels.long().to(device)
         data, targets_a, targets_b, lam = cutmix_data(data, labels, 0.4, use_cuda)
+        targets_a=targets_a.to(device)
+        targets_b=targets_b.to(device)
         out = model(data)
         # loss = criterion(out, labels)
         loss = criterion(out, targets_a) * lam + criterion(out, targets_b) * (1. - lam)
@@ -104,7 +113,12 @@ def test(epoch):
     total = 0.
     with torch.no_grad():
         for idx, (data, labels) in enumerate(valloader):
-            data, labels = data.to(device), labels.long().to(device)
+            if not args.fp16:
+                data, target = data.to(device), labels.long().to(device)
+            else:
+                data, target = data.half().to(device), labels.long().to(device)
+            # data, labels = data.to(device), labels.long().to(device)
+            labels=labels.cuda()
             out = model(data)
             loss = criterion(out, labels)
 
@@ -153,6 +167,7 @@ def test(epoch):
         'acc': format(acc, '.4f'),
         'lr': optimizer.param_groups[0]['lr']
     })
+
 
     return {'loss': loss, 'acc': acc}
 
@@ -235,6 +250,12 @@ if __name__ == '__main__':
     model = BaseModel(model_name=args.model_name, num_classes=args.num_classes, pretrained=args.pretrained,
                           pool_type=args.pool_type, down=args.down)
 
+    if args.fp16:
+        model = model.half()
+        for bn in get_bn_modules(model):
+            bn.float()
+
+
     if args.resume:
         state = torch.load(args.resume)
         print('resume from:{}'.format(args.resume))
@@ -259,7 +280,7 @@ if __name__ == '__main__':
     #     [{'params': filter(lambda p: p.requires_grad, model.parameters()), 'lr': args.lr}],
     #     weight_decay=args.weight_decay, momentum=args.momentum)
     # optimizer4center = torch.optim.SGD(center_loss.parameters(), lr=0.5)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,weight_decay = 1e-3)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,weight_decay = 1e-3,eps=1e-4)
     # optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-3)
 
     # print('init_lr={}, weight_decay={}, momentum={}'.format(args.lr, args.weight_decay, args.momentum))
