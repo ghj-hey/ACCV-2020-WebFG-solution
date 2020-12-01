@@ -1,6 +1,8 @@
 ### ACCV 2020 Webly-Supervised Fine-Grained Recognition Challenge 
 
-### Solution V1.0(EfficientNetB1 test46.18).
+### Solution V2.0(EfficientNetB4，300*300input，single model).
+
+Final B4 score is 54.47
 
 ---
 
@@ -26,4 +28,3 @@
 
 Give a big fist
 
-![微信图片_20201116190249](C:\Users\user\Desktop\微信图片_20201116190249.jpg)
